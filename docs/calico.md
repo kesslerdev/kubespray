@@ -1,66 +1,56 @@
 # Calico
 
-N.B. **Version 2.6.5 upgrade to 3.1.1 is upgrading etcd store to etcdv3**
-
-If you create automated backups of etcdv2 please switch for creating etcdv3 backups, as kubernetes and calico now uses etcdv3
- After migration you can check `/tmp/calico_upgrade/` directory for converted items to etcdv3.
- **PLEASE TEST upgrade before upgrading production cluster.**
-
 Check if the calico-node container is running
 
 ```ShellSession
 docker ps | grep calico
 ```
 
-The **calicoctl** command allows to check the status of the network workloads.
+The **calicoctl.sh** is wrap script with configured access credentials for command calicoctl allows to check the status of the network workloads.
 
 * Check the status of Calico nodes
 
 ```ShellSession
-calicoctl node status
-```
-
-or for versions prior to *v1.0.0*:
-
-```ShellSession
-calicoctl status
+calicoctl.sh node status
 ```
 
 * Show the configured network subnet for containers
 
 ```ShellSession
-calicoctl get ippool -o wide
+calicoctl.sh get ippool -o wide
 ```
 
-or for versions prior to *v1.0.0*:
+* Show the workloads (ip addresses of containers and their location)
 
 ```ShellSession
-calicoctl pool show
-```
-
-* Show the workloads (ip addresses of containers and their located)
-
-```ShellSession
-calicoctl get workloadEndpoint -o wide
+calicoctl.sh get workloadEndpoint -o wide
 ```
 
 and
 
 ```ShellSession
-calicoctl get hostEndpoint -o wide
-```
-
-or for versions prior *v1.0.0*:
-
-```ShellSession
-calicoctl endpoint show --detail
+calicoctl.sh get hostEndpoint -o wide
 ```
 
 ## Configuration
 
+### Optional : Define datastore type
+
+The default datastore, Kubernetes API datastore is recommended for on-premises deployments, and supports only Kubernetes workloads; etcd is the best datastore for hybrid deployments.
+
+Allowed values are `kdd` (default) and `etcd`.
+
+Note: using kdd and more than 50 nodes, consider using the `typha` daemon to provide scaling.
+
+To re-define you need to edit the inventory and add a group variable `calico_datastore`
+
+```yml
+calico_datastore: kdd
+```
+
 ### Optional : Define network backend
 
-In some cases you may want to define Calico network backend. Allowed values are 'bird', 'gobgp' or 'none'. Bird is a default value.
+In some cases you may want to define Calico network backend. Allowed values are `bird`, `vxlan` or `none`. Bird is a default value.
 
 To re-define you need to edit the inventory and add a group variable `calico_network_backend`
 
@@ -101,6 +91,15 @@ This can be enabled by setting the following variable as follow in group_vars (k
 
 ```yml
 calico_advertise_cluster_ips: true
+```
+
+Since calico 3.10, Calico supports advertising Kubernetes service ExternalIPs over BGP in addition to cluster IPs advertising.
+This can be enabled by setting the following variable in group_vars (k8s-cluster/k8s-net-calico.yml)
+
+```yml
+calico_advertise_service_external_ips:
+- x.x.x.x/24
+- y.y.y.y/32
 ```
 
 ### Optional : Define global AS number
@@ -199,9 +198,29 @@ To re-define health host please set the following variable in your inventory:
 calico_healthhost: "0.0.0.0"
 ```
 
+## Config encapsulation for cross server traffic
+
+Calico supports two types of encapsulation: [VXLAN and IP in IP](https://docs.projectcalico.org/v3.11/networking/vxlan-ipip). VXLAN is supported in some environments where IP in IP is not (for example, Azure).
+
+*IP in IP* and *VXLAN* is mutualy exclusive modes.
+
+Configure Ip in Ip mode. Possible values is `Always`, `CrossSubnet`, `Never`.
+
+```yml
+calico_ipip_mode: 'Always'
+```
+
+Configure VXLAN mode. Possible values is `Always`, `CrossSubnet`, `Never`.
+
+```yml
+calico_vxlan_mode: 'Never'
+```
+
+If you use VXLAN mode, BGP networking is not required. You can disable BGP to reduce the moving parts in your cluster by `calico_network_backend: vxlan`
+
 ## Cloud providers configuration
 
-Please refer to the official documentation, for example [GCE configuration](http://docs.projectcalico.org/v1.5/getting-started/docker/installation/gce) requires a security rule for calico ip-ip tunnels. Note, calico is always configured with ``ipip: true`` if the cloud provider was defined.
+Please refer to the official documentation, for example [GCE configuration](http://docs.projectcalico.org/v1.5/getting-started/docker/installation/gce) requires a security rule for calico ip-ip tunnels. Note, calico is always configured with ``calico_ipip_mode: Always`` if the cloud provider was defined.
 
 ### Optional : Ignore kernel's RPF check setting
 
@@ -215,7 +234,28 @@ Note that in OpenStack you must allow `ipip` traffic in your security groups,
 otherwise you will experience timeouts.
 To do this you must add a rule which allows it, for example:
 
+### Optional : Felix configuration via extraenvs of calico node
+
+Possible environment variable parameters for [configuring Felix](https://docs.projectcalico.org/reference/felix/configuration)
+
+```yml
+calico_node_extra_envs:
+    FELIX_DEVICEROUTESOURCEADDRESS: 172.17.0.1
+```
+
 ```ShellSession
 neutron  security-group-rule-create  --protocol 4  --direction egress  k8s-a0tp4t
 neutron  security-group-rule-create  --protocol 4  --direction igress  k8s-a0tp4t
 ```
+
+### Optional : Use Calico CNI host-local IPAM plugin
+
+Calico currently supports two types of CNI IPAM plugins, `host-local` and `calico-ipam` (default).
+
+To allow Calico to determine the subnet to use from the Kubernetes API based on the `Node.podCIDR` field, enable the following setting.
+
+```yml
+calico_ipam_host_local: true
+```
+
+Refer to Project Calico section [Using host-local IPAM](https://docs.projectcalico.org/reference/cni-plugin/configuration#using-host-local-ipam) for further information.

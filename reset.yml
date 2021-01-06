@@ -1,17 +1,21 @@
 ---
-- hosts: localhost
-  become: no
-  gather_facts: False
+- name: Check ansible version
+  import_playbook: ansible_version.yml
+
+- hosts: all
+  gather_facts: false
+  tags: always
   tasks:
-    - name: "Check ansible version >=2.7.8"
-      assert:
-        msg: "Ansible must be v2.7.8 or higher"
-        that:
-          - ansible_version.string is version("2.7.8", ">=")
-      tags:
-        - check
-  vars:
-    ansible_connection: local
+    - name: "Set up proxy environment"
+      set_fact:
+        proxy_env:
+          http_proxy: "{{ http_proxy | default ('') }}"
+          HTTP_PROXY: "{{ http_proxy | default ('') }}"
+          https_proxy: "{{ https_proxy | default ('') }}"
+          HTTPS_PROXY: "{{ https_proxy | default ('') }}"
+          no_proxy: "{{ no_proxy | default ('') }}"
+          NO_PROXY: "{{ no_proxy | default ('') }}"
+      no_log: true
 
 - hosts: bastion[0]
   gather_facts: False
@@ -19,10 +23,11 @@
     - { role: kubespray-defaults}
     - { role: bastion-ssh-config, tags: ["localhost", "bastion"]}
 
-- hosts: all
-  gather_facts: true
+- name: Gather facts
+  import_playbook: facts.yml
 
 - hosts: etcd:k8s-cluster:calico-rr
+  gather_facts: False
   vars_prompt:
     name: "reset_confirmation"
     prompt: "Are you sure you want to reset cluster state? Type 'yes' to reset your cluster."

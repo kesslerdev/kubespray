@@ -1,9 +1,19 @@
 ---
+- name: check if fedora coreos
+  stat:
+    path: /run/ostree-booted
+  register: ostree
+
+- name: set is_ostree
+  set_fact:
+    is_ostree: "{{ ostree.stat.exists }}"
+
+
 - name: Fail containerd setup if distribution is not supported
   fail:
     msg: "{{ ansible_distribution }} is not supported by containerd."
   when:
-    - not ansible_distribution in ["CentOS","RedHat", "Ubuntu", "Debian"]
+    - not ansible_distribution in ["CentOS","RedHat", "Ubuntu", "Debian", "Fedora"]
 
 - name: gather os specific variables
   include_vars: "{{ item }}"
@@ -24,7 +34,22 @@
   tags:
     - facts
 
+- name: disable unified_cgroup_hierarchy in Fedora 31+
+  command: grubby --update-kernel=ALL --args="systemd.unified_cgroup_hierarchy=0"
+  when:
+    - ansible_distribution == "Fedora"
+    - (ansible_distribution_major_version | int) >= 31
+    - ansible_proc_cmdline['systemd.unified_cgroup_hierarchy'] is not defined or ansible_proc_cmdline['systemd.unified_cgroup_hierarchy'] != '0'
+
+- name: reboot in Fedora 31+
+  reboot:
+  when:
+    - ansible_distribution == "Fedora"
+    - (ansible_distribution_major_version | int) >= 31
+    - ansible_proc_cmdline['systemd.unified_cgroup_hierarchy'] is not defined or ansible_proc_cmdline['systemd.unified_cgroup_hierarchy'] != '0'
+
 - include_tasks: containerd_repo.yml
+  when: not is_ostree
 
 - name: Create containerd service systemd directory if it doesn't exist
   file:
@@ -63,16 +88,16 @@
     mode: 0644
   when:
     - ansible_os_family in ['Ubuntu', 'Debian']
-    - not is_atomic
+    - not is_ostree
 
 - name: ensure containerd packages are installed
   action: "{{ containerd_package_info.pkg_mgr }}"
   args:
     pkg: "{{ item.name }}"
     force: "{{ item.force | default(omit) }}"
-    conf_file: "{{ item.yum_conf | default(omit) }}"
     state: present
     update_cache: "{{ omit if ansible_distribution == 'Fedora' else True }}"
+    enablerepo: "{{ item.repo | default(omit) }}"
   register: containerd_task_result
   until: containerd_task_result is succeeded
   retries: 4
@@ -80,28 +105,9 @@
   with_items: "{{ containerd_package_info.pkgs }}"
   notify: restart containerd
   when:
-    - not is_atomic
+    - not is_ostree
     - containerd_package_info.pkgs|length > 0
   ignore_errors: true
 
-- name: Check if runc is installed
-  stat:
-    path: "{{ runc_binary }}"
-  register: runc_stat
-
-- name: Install runc package if necessary
-  action: "{{ containerd_package_info.pkg_mgr }}"
-  args:
-    pkg: runc
-    state: present
-    update_cache: "{{ omit if ansible_distribution == 'Fedora' else True }}"
-  register: runc_task_result
-  until: runc_task_result is succeeded
-  retries: 4
-  delay: "{{ retry_stagger | d(3) }}"
-  notify: restart containerd
-  when:
-    - not is_atomic
-    - not runc_stat.stat.exists
-
-- include_tasks: crictl.yml
+- include_role:
+    name: container-engine/crictl
